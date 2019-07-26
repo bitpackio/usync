@@ -1,0 +1,85 @@
+#!/bin/bash
+#
+# sync src to dest from local mountpoint to usb device based on uuid
+#
+# Copyright (C) 2014 bitpack.io <hello@bitpack.io>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License at <http://www.gnu.org/licenses/> for
+# more details.
+#
+
+basename="usync"
+err_generic="-10"
+
+config="/etc/usync/usync.conf"
+library="/usr/local/lib/usync/usync.lib"
+
+source $config 1>/dev/null 2>/dev/null || {
+  echo "error: usync config $config does not exist"
+  exit ${err_generic}
+}
+
+source $library 1>/dev/null 2>/dev/null || {
+  echo "error: usync library $library does not exist"
+  exit ${err_generic}
+}
+
+[ "${startup}" == 1 ] || {
+  log "info: startup not allowed"
+  die "info: please setup usync.conf and set startup to 1 in order to allow usync to start"
+}
+
+binarylist="basename logger cut mail cat rm mount umount rsync date"
+
+set_env "$binarylist"
+
+lock
+
+[ ! -d "${source}" ] && {
+  die "error: ${source} does not exist"
+}
+
+uuid="unknown"
+
+for uuid in ${uuids}; do
+  [ -L "/dev/disk/by-uuid/${uuid}" ] && {
+    [ $verbose == "yes" ] && { 
+      log "info: uuid $uuid found" 
+      break
+    }
+  }
+done
+
+[ $uuid == "unknown" ] && {
+  die "error: no uuid found from the given list"
+}
+
+mount_uuid
+
+[ ! -d "${dest}" ] && {
+  die "error: ${dest} does not exist"
+}
+
+[ $verbose == "yes" ] && { 
+  log "info: syncing $source to $dest" 
+}
+
+${bin_rsync} --log-file=/var/log/usync.log -acvz --del --acls "${source}" "${dest}" 1>/dev/null 2>/dev/null && {
+   [ $verbose == "yes" ] && { 
+     log "info: ${dest} successfully synced" 
+   }
+} || {
+  die "error: can't sync ${source} to ${dest}"
+}
+
+umount_uuid
+notify "${address}" "${basename} finished successfully" "State: uuid ${uuid} synced on $(${bin_date})"
+unlock
