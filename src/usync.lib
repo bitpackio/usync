@@ -1,0 +1,185 @@
+#!/bin/bash
+#
+# usync library 
+#
+# Copyright (C) 2014 bitpack.io <hello@bitpack.io>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License at <http://www.gnu.org/licenses/> for
+# more details.
+#
+
+[ -z "$basename" ] && basename="basename"
+[ -z "$startup" ] && startup=0
+[ -z "$mountpoint" ] && mountpoint="/mnt"
+[ -z "$folder" ] && folder="folder/"
+[ -z "$uuids" ] && uuids="unset"
+[ -z "$source" ] && source="/etc/"
+[ -z "$dest" ] && dest="${mountpoint}/${folder}"
+[ -z "$syslog" ] && syslog="yes"
+[ -z "$verbose" ] && verbose="yes"
+[ -z "$debug" ] && debug="yes"
+
+lockfile="/var/run/${basename}.pid"
+facility="Local1"
+
+function set_binary() {
+
+  if [ $# -lt 1 ]; then 
+    echo "warning: set_binary: missing parameter binary"
+    exit 0;
+  fi 
+
+  local binary=${1}
+  local binarypathlist="/bin /usr/bin /usr/local/bin /sbin /usr/sbin /usr/local/sbin"
+
+  if [ ${debug} = "yes" ]; then
+    echo "debug: set_binary: binary{${binary}}"
+    echo "debug: set_binary: binarypathlist{${binarypathlist}}"
+  fi
+
+  for binarypath in ${binarypathlist}; do
+    if [ -x ${binarypath}/${binary} ]; then
+      export bin_${binary}=${binarypath}/${binary}
+      return 0
+    fi
+  done
+}
+
+function set_binary_list() {
+
+  if [ $# -lt 1 ]; then 
+    echo "warning: set_binary_list: missing parameter binarylist"
+    exit 0;
+  fi 
+
+  local binarylist=${*}
+
+  if [ ${debug} = "yes" ]; then
+    echo "debug: set_binary_list: binarylist{${binarylist}}"
+  fi
+
+  for binary in ${binarylist}; do
+    set_binary "${binary}" || return ${?}
+  done
+}
+
+function set_env() {
+
+  if [ $# -lt 1 ]; then 
+    echo "warning: set_env: missing parameter binarylist"
+    exit 0;
+  fi 
+
+  local binarylist=${1}
+
+  if [ ${debug} = "yes" ]; then  
+    echo "debug: set_env: binarylist{${binarylist}}"
+  fi
+
+  set_binary_list ${binarylist} || die "error: missing executable binary"
+}
+
+function log() {
+
+  local priority="`echo $* | $bin_cut -d ':' -f1`"
+  local logmessage="`echo $* | $bin_cut -d ':' -f2-`"
+  local logmessage="`$bin_basename $0 | $bin_cut -d '.' -f1`[$$]:$logmessage"
+
+  [ "$verbose" = "no" ] && { 
+      [ "$syslog" = "yes" ] && $bin_logger -p $facility.$priority $logmessage
+  } || {
+      echo "`date '+%b %e %H:%M:%S'`: $logmessage"
+      [ "$syslog" = "yes" ] && $bin_logger -p $facility.$priority $logmessage
+  }
+}
+
+function notify() {
+
+  [ $# -lt 3 ] && { 
+    echo "warning: notify: missing parameters recipient subject message"
+    return 0
+  }
+
+  local recipient=${1}
+  local subject=${2}
+  local message=${3}
+
+  $(echo ${message} |\
+    ${bin_mail} -s "${subject}" ${recipient}) || {
+      log "error: error while sending e-mail to ${notify}."
+    }
+}
+
+function mount_uuid() {
+
+  [ "$verbose" = "yes" ] && { 
+    log "info: mounting uuid $uuid" 
+  }
+
+  ${bin_mount} "/dev/disk/by-uuid/${uuid}" "${mountpoint}" 1>/dev/null 2>/dev/null && {
+    log "info: uuid $uuid successfully mounted on ${mountpoint}" 
+  } || {
+    die "error: can't mount /dev/disk/by-uuid/${uuid} on ${mountpoint}"
+  }
+}
+
+function umount_uuid() {
+
+  [ "$verbose" = "yes" ] && { 
+    log "info: unmounting uuid $uuid" 
+  }
+
+  ${bin_umount} "/dev/disk/by-uuid/${uuid}" 1>/dev/null 2>/dev/null  && {
+    log "info: uuid $uuid successfully unmounted" 
+  } || {
+    die "error: can't umount /dev/disk/by-uuid/${uuid}"
+  }
+}
+
+function die() {
+
+  [ $# -lt 1 ] && { 
+    echo "warning: die: missing parameter message"
+    return 0
+  }
+
+  log "${*}"
+  notify "${address}" "${basename} failure notification" "${*}"
+  exit ${err_generic};
+}
+
+function lock() {
+
+  [ ! -f ${lockfile} ] && {
+    echo $$ >> ${lockfile} && {
+      log "info: lock file ${lockfile} successfully created"
+    } || {
+      die "error: can't create lock file ${lockfile}"
+    }
+  } || {
+    log "error: lock file ${lockfile} exists"
+    log "error: another ${basename} process was or is running under pid $(${bin_cat} ${lockfile})"
+    die "error: stop process $(${bin_cat} ${lockfile}) or remove the stale lock file ${lockfile}"
+  }
+}
+
+function unlock() {
+
+  [ -f ${lockfile} ] && {
+    $(${bin_rm} ${lockfile}) && {
+      log "info: lock file ${lockfile} successfully removed"
+    } || {
+      die "error: can't remove lock file ${lockfile}"
+    }
+  } || {
+    die "error: lock file ${lockfile} does not exist"
+  }
+}
